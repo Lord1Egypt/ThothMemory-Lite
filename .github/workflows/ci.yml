@@ -34,10 +34,11 @@ jobs:
       - name: CLI smoke test
         shell: bash
         run: |
-          go build -o "$RUNNER_TEMP/thoth-lite" ./cmd/thoth-lite
-          "$RUNNER_TEMP/thoth-lite" --data "$RUNNER_TEMP/smoke" init
-          "$RUNNER_TEMP/thoth-lite" --data "$RUNNER_TEMP/smoke" doctor
-          "$RUNNER_TEMP/thoth-lite" --data "$RUNNER_TEMP/smoke" backup "$RUNNER_TEMP/smoke-backup.db"
+          bin="$RUNNER_TEMP/thoth-lite$(go env GOEXE)"
+          go build -o "$bin" ./cmd/thoth-lite
+          "$bin" --data "$RUNNER_TEMP/smoke" init
+          "$bin" --data "$RUNNER_TEMP/smoke" doctor
+          "$bin" --data "$RUNNER_TEMP/smoke" backup "$RUNNER_TEMP/smoke-backup.db"
 
   security:
     runs-on: ubuntu-24.04
@@ -67,11 +68,12 @@ jobs:
         run: |
           set -euo pipefail
           for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 android/arm64; do
-            os=${target%/*}; arch=${target#*/}
+            os=${target%/*}; arch=${target#*/}; ext=""
+            [ "$os" = windows ] && ext=".exe"
             for n in 1 2; do
-              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags="-s -w" -o "out$n/thoth-lite-$os-$arch" ./cmd/thoth-lite
+              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags="-s -w" -o "out$n/thoth-lite-$os-$arch$ext" ./cmd/thoth-lite
             done
-            cmp "out1/thoth-lite-$os-$arch" "out2/thoth-lite-$os-$arch"
+            cmp "out1/thoth-lite-$os-$arch$ext" "out2/thoth-lite-$os-$arch$ext"
           done
           ls -l out1
           sha256sum out1/*
