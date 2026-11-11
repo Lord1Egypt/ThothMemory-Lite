@@ -1,9 +1,42 @@
 # ThothMemory Lite
 
-Standalone, SQLite-only shared memory for AI coding agents, delivered as one Go executable (`thoth-lite`).
+Standalone, SQLite-only shared memory for AI coding agents, in one Go executable: `thoth-lite`.
 
-**Status: in development.** Nothing is released yet. Work lands through pull requests, and each PR states
-what was implemented and how it was tested. See [docs/PROVENANCE.md](docs/PROVENANCE.md) for the
-source baseline (ThothMemory UltraLite at `0ff63ab`).
+Agents (Claude Code, Codex, OpenCode and others) launch `thoth-lite mcp-stdio` as an MCP server and share
+one local SQLite memory: projects, sessions, checkpoints, tasks, decisions, issues, evidence and handoffs.
+There is no database server, no network listener, no Docker and no paid API.
 
-License: MIT.
+**Status: in development (0.1.0-dev).** Nothing is released yet. This README describes only what is
+implemented on `main`.
+
+## What works today
+
+| Area | State |
+|---|---|
+| MCP stdio server (official Go MCP SDK) with per-agent credentials and project scopes | carried over from UltraLite, tested |
+| SQLite engine: pure Go (no CGO), WAL, `synchronous=FULL`, foreign keys, append-only history triggers, idempotent operations, optimistic revisions, checksummed transactional migrations | carried over, tested |
+| CLI inspection: `projects`, `brief`, `search`, `tasks`, `timeline`, `call` | carried over, tested |
+| Local backup (`VACUUM INTO` snapshot + SHA-256 sidecar) and verified restore that keeps the previous database | carried over, tested |
+| Portable project export/import | carried over, tested (SQLite to SQLite) |
+| `import-ultralite`: copy UltraLite memory into Lite without writing to the UltraLite files | new, tested (including against a live WAL) |
+| Client registration, lifecycle hooks and instructions for Codex, Claude Code and OpenCode | carried over; to be reworked and runtime-verified |
+
+## Install from source
+
+```bash
+go install github.com/Lord1Egypt/ThothMemory-Lite/cmd/thoth-lite@latest   # Go 1.26.11+, no CGO
+thoth-lite init        # creates ~/.local/share/thoth-lite (override: --data DIR or THOTH_LITE_HOME)
+thoth-lite doctor      # permissions, integrity, and a real MCP stdio session
+```
+
+Coming from ThothMemory UltraLite? Lite keeps its own data directory so it never upgrades your UltraLite
+database in place. Copy your memory with:
+
+```bash
+thoth-lite import-ultralite            # reads ~/.local/share/thothmemory (or THOTH_HOME); never writes to it
+thoth-lite import-ultralite --file BACKUP.db
+```
+
+## Provenance and license
+
+Derived from ThothMemory UltraLite at commit `0ff63ab`; see [docs/PROVENANCE.md](docs/PROVENANCE.md). MIT license.
