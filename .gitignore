@@ -1,0 +1,9 @@
+/thoth-lite
+/thoth-lite.exe
+/dist/
+*.db
+*.db-wal
+*.db-shm
+*.thoth-backup-*
+.secrets/
+coverage.out
