@@ -42,6 +42,9 @@ type Backend interface {
 	Register(ctx context.Context, p Principal) error
 	ListProjects(ctx context.Context, all bool, ids []string, limit, offset int) ([]Row, error)
 	CreateProject(ctx context.Context, name, repository string) (Row, error)
+	// ResolveProject finds the project whose repository or alias is identity
+	// (already canonical); it returns nil when none matches.
+	ResolveProject(ctx context.Context, identity string) (Row, error)
 	Tasks(ctx context.Context, project, task, state string, limit, offset int) ([]Row, error)
 	Activity(ctx context.Context, project, task string, limit, offset int) ([]Row, error)
 	LatestHandoff(ctx context.Context, project string) ([]Row, error)

@@ -28,7 +28,25 @@ func (s *Store) ListProjects(ctx context.Context, all bool, ids []string, limit,
 	return s.rows(ctx, s.DB, "SELECT "+memory.ProjectColumns+" FROM projects WHERE "+where+" ORDER BY "+s.D.NameCollation+",id LIMIT ? OFFSET ?", append(args, limit, offset)...)
 }
 
+// ResolveProject finds a project by canonical repository, then by alias.
+func (s *Store) ResolveProject(ctx context.Context, identity string) (memory.Row, error) {
+	rows, e := s.rows(ctx, s.DB, "SELECT "+memory.ProjectColumns+",'repository' AS matched_by FROM projects WHERE repository=?"+
+		" UNION ALL SELECT "+prefixed("p", memory.ProjectColumns)+",'alias' AS matched_by FROM project_aliases a JOIN projects p ON p.id=a.project_id WHERE a.identity=? LIMIT 1", identity, identity)
+	if e != nil || len(rows) == 0 {
+		return nil, e
+	}
+	return rows[0], nil
+}
+
 func (s *Store) CreateProject(ctx context.Context, name, repo string) (memory.Row, error) {
+	// An identity linked to an existing project resolves to it: creating a
+	// second project for the same checkout is never possible.
+	if r, e := s.ResolveProject(ctx, repo); e != nil || (r != nil && r["matched_by"] == "alias") {
+		if r != nil {
+			delete(r, "matched_by")
+		}
+		return r, e
+	}
 	// The repository is the natural idempotency key; an existing project is returned unchanged.
 	_, e := s.DB.ExecContext(ctx, "INSERT INTO projects(id,name,repository,created_at) VALUES(?,?,?,?)", memory.NewID(), name, repo, s.now())
 	if e = s.ignoreDuplicate(e); e != nil {

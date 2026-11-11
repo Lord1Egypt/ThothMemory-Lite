@@ -61,6 +61,28 @@ func Call(ctx context.Context, b Backend, p Principal, tool string, a Input) (an
 			}
 		}
 		return out, nil
+	case "resolve_project":
+		identity, e := CanonicalRepository(a.Repository)
+		if e != nil && !strings.Contains(a.Repository, "://") && !strings.HasPrefix(a.Repository, "local:") {
+			// Also accept the stored canonical form ("host/path") that
+			// list_projects returns.
+			identity, e = CanonicalRepository("https://" + a.Repository)
+		}
+		if e != nil {
+			return nil, e
+		}
+		row, e := b.ResolveProject(ctx, identity)
+		if e != nil {
+			return nil, e
+		}
+		if row == nil {
+			return Row{"found": false, "identity": identity}, nil
+		}
+		if !p.Allows(row["id"].(string)) {
+			return nil, ErrForbidden
+		}
+		row["found"] = true
+		return row, nil
 	case "create_project":
 		if !p.Write || !p.Allows("*") {
 			return nil, ErrForbidden

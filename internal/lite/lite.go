@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Lord1Egypt/ThothMemory-Lite/internal/capture"
@@ -182,7 +183,27 @@ func Stdio(ctx context.Context, h Home, tokenFile string) error {
 	if e = s.Register(ctx, p); e != nil {
 		return e
 	}
-	return mcptools.Server(s, p).Run(ctx, &mcp.StdioTransport{})
+	var client string
+	var lastOp atomic.Int64
+	obs := mcptools.Observer{
+		Initialized: func(ctx context.Context, name, version string) {
+			client = name
+			// Diagnostics only: a failed note must never break the session.
+			if err := s.RecordHandshake(ctx, p.ID, name, version, "stdio"); err != nil {
+				fmt.Fprintln(os.Stderr, "thoth-lite: could not record client handshake:", memory.SafeError(err))
+			}
+		},
+		Succeeded: func() { lastOp.Store(time.Now().UnixNano()) },
+	}
+	e = mcptools.ServerWith(s, p, obs).Run(ctx, &mcp.StdioTransport{})
+	if n := lastOp.Load(); n != 0 && client != "" {
+		done, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.RecordOperation(done, p.ID, client, time.Unix(0, n)); err != nil {
+			fmt.Fprintln(os.Stderr, "thoth-lite: could not record last operation:", memory.SafeError(err))
+		}
+	}
+	return e
 }
 
 // Backup writes a verified online snapshot and a SHA-256 sidecar.

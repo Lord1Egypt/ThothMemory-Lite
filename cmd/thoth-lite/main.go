@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,6 +38,11 @@ const usage = `ThothMemory Lite %s (SQLite; headless: no server, no web UI)
 
 Inspect memory (read-only, as the local owner):
   projects                      every project: activity, blockers, next action
+  projects link PROJECT IDENTITY [--yes]
+                                make another identity (e.g. a newly added Git remote) resolve
+                                to PROJECT; refuses identities owned by another project
+  projects unlink PROJECT IDENTITY [--yes]
+  projects aliases PROJECT      identities linked to PROJECT
   brief PROJECT [--head SHA]    resume briefing; --head marks stale evidence
   search PROJECT QUERY          search records, tasks, events and evidence
   tasks PROJECT [--state S]     tasks, optionally by state
@@ -119,7 +126,12 @@ func run(ctx context.Context, args []string) error {
 		}
 		// stdout carries the protocol; diagnostics go to stderr only.
 		return lite.Stdio(ctx, h, token)
-	case "projects", "brief", "search", "tasks", "timeline", "call":
+	case "projects":
+		if len(rest) > 0 {
+			return projectIdentities(ctx, h, rest)
+		}
+		return inspect(ctx, h, cmd, rest)
+	case "brief", "search", "tasks", "timeline", "call":
 		return inspect(ctx, h, cmd, rest)
 	case "status":
 		st, e := lite.Status(ctx, h)
@@ -411,4 +423,62 @@ func first(args []string) string {
 		return args[0]
 	}
 	return ""
+}
+
+// projectIdentities implements the owner-only identity commands.
+func projectIdentities(ctx context.Context, h lite.Home, args []string) error {
+	yes := false
+	var rest []string
+	for _, a := range args {
+		if a == "--yes" {
+			yes = true
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	s, release, e := lite.Open(ctx, h)
+	if e != nil {
+		return e
+	}
+	defer release()
+	switch {
+	case len(rest) == 2 && rest[0] == "aliases":
+		rows, e := s.Aliases(ctx, rest[1])
+		if e != nil {
+			return e
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{"data": rows})
+	case len(rest) == 3 && (rest[0] == "link" || rest[0] == "unlink"):
+		identity, e := memory.CanonicalRepository(rest[2])
+		if e != nil {
+			return e
+		}
+		if !memory.UUID(rest[1]) {
+			return errors.New("PROJECT must be a project ID (see: thoth-lite projects)")
+		}
+		verb := map[string]string{"link": "resolve to", "unlink": "stop resolving to"}[rest[0]]
+		fmt.Printf("%s will %s project %s.\n", identity, verb, rest[1])
+		if !yes {
+			if !interactive(os.Stdin) {
+				return errors.New("confirmation required: rerun with --yes")
+			}
+			fmt.Print("Proceed? [y/N] ")
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(line)) != "y" {
+				return errors.New("cancelled; nothing changed")
+			}
+		}
+		if rest[0] == "link" {
+			e = s.LinkIdentity(ctx, rest[1], identity, lite.Owner)
+		} else {
+			e = s.UnlinkIdentity(ctx, rest[1], identity, lite.Owner)
+		}
+		if e == nil {
+			fmt.Println("Done. The change is recorded in the project's history.")
+		}
+		return e
+	}
+	return errors.New("projects [link|unlink PROJECT IDENTITY [--yes] | aliases PROJECT]")
 }

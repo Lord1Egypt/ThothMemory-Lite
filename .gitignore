@@ -7,3 +7,4 @@
 *.thoth-backup-*
 .secrets/
 coverage.out
+!tests/testdata/*.db

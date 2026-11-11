@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -185,7 +186,13 @@ func (s *Store) current(ctx context.Context) bool {
 
 func (s *Store) migrate(ctx context.Context) error {
 	if s.current(ctx) {
-		return nil // opening a healthy database must not need the write lock
+		// Opening a healthy database must not need the write lock, but it must
+		// still refuse a schema written by a newer thoth-lite.
+		files, e := schema.ReadDir("schema")
+		if e != nil {
+			return e
+		}
+		return refuseUnknown(ctx, s.DB, files)
 	}
 	tx, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
@@ -197,6 +204,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	files, e := schema.ReadDir("schema")
 	if e != nil {
+		return e
+	}
+	if e = refuseUnknown(ctx, tx, files); e != nil {
 		return e
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
@@ -222,6 +232,33 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	return wrap(tx.Commit())
+}
+
+// refuseUnknown rejects a database that records a migration this build does
+// not embed: it was written by a newer thoth-lite, and running older code
+// against it could corrupt memory. Downgrades are never attempted.
+func refuseUnknown(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, files []fs.DirEntry) error {
+	known := map[string]bool{}
+	for _, f := range files {
+		known[f.Name()] = true
+	}
+	rows, e := q.QueryContext(ctx, "SELECT version FROM schema_migrations")
+	if e != nil {
+		return wrap(e)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v string
+		if e = rows.Scan(&v); e != nil {
+			return wrap(e)
+		}
+		if !known[v] {
+			return fmt.Errorf("database schema %s is newer than this thoth-lite %s; upgrade thoth-lite (downgrades are not supported)", v, memory.LiteVersion)
+		}
+	}
+	return wrap(rows.Err())
 }
 
 func (s *Store) SchemaVersion(ctx context.Context) (string, error) {

@@ -85,11 +85,21 @@ func TestAuditProjectAssociationsAndExpiredClaims(t *testing.T) {
 	if len(projects) != 1 || projects[0].(map[string]any)["id"] != a {
 		t.Fatal("scoped discovery", projects)
 	}
+	repoB := ""
+	for _, r := range must(s.Call(ctx, p, "list_projects", memory.Input{Limit: 100})).([]memory.Row) {
+		if r["id"] == b {
+			repoB = r["repository"].(string)
+		}
+	}
 	for _, contract := range mcptools.Contracts {
 		if contract.Name == "list_projects" || contract.Name == "get_health" || contract.Name == "create_project" {
 			continue
 		}
-		if _, err := s.Call(ctx, scoped, contract.Name, memory.Input{ProjectID: b}); !errors.Is(err, memory.ErrForbidden) {
+		in := memory.Input{ProjectID: b}
+		if contract.Name == "resolve_project" {
+			in = memory.Input{Repository: repoB}
+		}
+		if _, err := s.Call(ctx, scoped, contract.Name, in); !errors.Is(err, memory.ErrForbidden) {
 			t.Errorf("%s unauthorized result: %v", contract.Name, err)
 		}
 	}

@@ -270,11 +270,21 @@ func concurrency(t *testing.T, h Harness) {
 		t.Fatal("project authorization bypass:", e)
 	}
 	h.fails(t, restricted, "create_project", memory.Input{Name: "forbidden", Repository: "https://github.com/thoth-contract/forbidden"})
+	repository := ""
+	for _, r := range h.call(t, Owner, "list_projects", memory.Input{Limit: 100}).([]memory.Row) {
+		if r["id"] == project {
+			repository = r["repository"].(string)
+		}
+	}
 	for _, c := range mcptools.Contracts {
 		if c.Name == "list_projects" || c.Name == "get_health" || c.Name == "create_project" {
 			continue
 		}
-		if _, e := memory.Call(ctx, h.Backend, restricted, c.Name, memory.Input{ProjectID: project}); !errors.Is(e, memory.ErrForbidden) {
+		in := memory.Input{ProjectID: project}
+		if c.Name == "resolve_project" {
+			in = memory.Input{Repository: repository}
+		}
+		if _, e := memory.Call(ctx, h.Backend, restricted, c.Name, in); !errors.Is(e, memory.ErrForbidden) {
 			t.Errorf("%s: scoped credential not forbidden: %v", c.Name, e)
 		}
 	}
