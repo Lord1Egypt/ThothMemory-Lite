@@ -338,3 +338,20 @@ func TestClientHandshakeIsRecorded(t *testing.T) {
 		t.Fatal("handshake time", rows[0]["last_handshake_at"], e)
 	}
 }
+
+// TestCRLFCheckoutKeepsChecksums guards the Windows checkout case: migration
+// files with CRLF line endings must hash like the LF files databases recorded.
+func TestCRLFCheckoutKeepsChecksums(t *testing.T) {
+	for _, name := range []string{"001_initial.sql", "002_project_aliases.sql", "003_client_integrations.sql"} {
+		b, e := os.ReadFile(filepath.Join("..", "internal", "sqlite", "schema", name))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if strings.Contains(string(b), "\r") {
+			t.Fatalf("%s is checked out with CRLF; .gitattributes must keep *.sql LF", name)
+		}
+	}
+	if sqlite.MigrationChecksum([]byte("a\r\nb\r\n")) != sqlite.MigrationChecksum([]byte("a\nb\n")) {
+		t.Fatal("CRLF changes the migration checksum")
+	}
+}

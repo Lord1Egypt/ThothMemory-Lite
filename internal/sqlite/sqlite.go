@@ -4,6 +4,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -175,7 +176,7 @@ func (s *Store) current(ctx context.Context) bool {
 	}
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		var sum string
 		if s.DB.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=?", f.Name()).Scan(&sum) != nil || sum != hex.EncodeToString(h[:]) {
 			return false
@@ -212,7 +213,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		sum := hex.EncodeToString(h[:])
 		var old string
 		e = tx.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=?", f.Name()).Scan(&old)
@@ -233,6 +234,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	return wrap(tx.Commit())
 }
+
+// migrationBytes normalizes line endings before hashing: a checkout with
+// CRLF line endings (Git on Windows) must produce the same checksums as the
+// LF files every existing database recorded.
+func migrationBytes(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
 
 // refuseUnknown rejects a database that records a migration this build does
 // not embed: it was written by a newer thoth-lite, and running older code
@@ -432,7 +438,7 @@ func Compatibility(ctx context.Context, path string) (applied []string, err erro
 	}
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		known[f.Name()] = hex.EncodeToString(h[:])
 	}
 	rows, e := db.QueryContext(ctx, "SELECT version, checksum FROM schema_migrations ORDER BY version")
@@ -461,4 +467,10 @@ func Compatibility(ctx context.Context, path string) (applied []string, err erro
 		return nil, errors.New("database has no applied migrations")
 	}
 	return applied, nil
+}
+
+// MigrationChecksum is the checksum recorded for a migration file's content.
+func MigrationChecksum(b []byte) string {
+	h := sha256.Sum256(migrationBytes(b))
+	return hex.EncodeToString(h[:])
 }
