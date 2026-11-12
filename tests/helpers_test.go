@@ -54,3 +54,5 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return b
 }
+
+func fileSHA(p string) (string, error) { return sqlite.FileSum(p) }

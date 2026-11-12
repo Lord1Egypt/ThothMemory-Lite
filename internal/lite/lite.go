@@ -229,9 +229,14 @@ func Backup(ctx context.Context, h Home, target string) (string, string, error) 
 	return target, sum, os.WriteFile(target+".sha256", []byte(sum+"\n"), 0600)
 }
 
-// Restore replaces the database with a verified backup. It refuses while any
-// UltraLite process has the memory open, keeps the replaced file beside it,
-// and requires explicit confirmation.
+// Restore replaces the database with a verified backup. Nothing in the data
+// directory changes until the backup has passed its SHA-256 sidecar,
+// integrity, foreign-key and schema-compatibility checks AND a staged copy has
+// been migrated to this build's schema and checked again. It refuses while any
+// thoth-lite process has the memory open, keeps the replaced file beside it,
+// rolls back if the final swap fails, and requires explicit confirmation. On a
+// new machine the data directory may not exist yet; run init afterwards to
+// create credentials.
 func Restore(ctx context.Context, h Home, backup string, confirmed bool) (string, error) {
 	side, e := os.ReadFile(backup + ".sha256")
 	if e != nil {
@@ -242,10 +247,19 @@ func Restore(ctx context.Context, h Home, backup string, confirmed bool) (string
 		return "", errors.New("backup SHA-256 integrity check failed; nothing changed")
 	}
 	if e = sqlite.Verify(ctx, backup); e != nil {
-		return "", fmt.Errorf("backup is not a healthy ThothMemory Lite database: %w", e)
+		return "", fmt.Errorf("backup is not a healthy ThothMemory database: %w; nothing changed", e)
+	}
+	if _, e = sqlite.Compatibility(ctx, backup); e != nil {
+		return "", fmt.Errorf("backup cannot be restored by this thoth-lite: %w; nothing changed", e)
 	}
 	if !confirmed {
 		return "", errors.New("backup verified. Restore replaces the current memory (it is kept as a .before-restore copy); rerun with --confirm")
+	}
+	if e = os.MkdirAll(h.Dir, 0700); e != nil {
+		return "", e
+	}
+	if e = cli.PrivateDir(h.Dir); e != nil {
+		return "", e
 	}
 	f, e := os.OpenFile(h.lockPath(), os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
@@ -254,6 +268,42 @@ func Restore(ctx context.Context, h Home, backup string, confirmed bool) (string
 	defer f.Close()
 	if lock(f, true) != nil {
 		return "", errors.New("memory is in use by another thoth-lite process (an agent session or CLI command); close your agents and retry")
+	}
+	staging := h.DB() + ".restoring"
+	removeDB := func(path string) {
+		for _, x := range []string{"", "-wal", "-shm"} {
+			os.Remove(path + x)
+		}
+	}
+	removeDB(staging) // leftovers of an interrupted restore
+	swapped := false
+	defer func() {
+		if !swapped {
+			removeDB(staging)
+		}
+	}()
+	if e = copyFile(backup, staging); e != nil {
+		return "", e
+	}
+	// Bring the staged copy to this build's schema and check it again before
+	// anything in the live slot changes.
+	st, e := sqlite.Open(ctx, staging)
+	if e != nil {
+		return "", e
+	}
+	if e = st.Migrate(ctx); e == nil {
+		if e = sqlite.Check(ctx, st.DB); e == nil {
+			_, e = st.DB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+		}
+	}
+	st.Close()
+	if e != nil {
+		return "", fmt.Errorf("staged restore failed its checks; nothing changed: %w", e)
+	}
+	os.Remove(staging + "-wal")
+	os.Remove(staging + "-shm")
+	if e = cli.PrivateFile(staging); e != nil {
+		return "", e
 	}
 	kept := ""
 	if _, e = os.Stat(h.DB()); e == nil {
@@ -267,23 +317,27 @@ func Restore(ctx context.Context, h Home, backup string, confirmed bool) (string
 		if e != nil {
 			return "", e
 		}
-		kept = h.DB() + ".before-restore-" + time.Now().UTC().Format("20060102T150405Z")
+		kept = h.DB() + ".before-restore-" + time.Now().UTC().Format("20060102T150405.000000000Z")
 		if e = os.Rename(h.DB(), kept); e != nil {
 			return "", e
 		}
-		for _, x := range []string{"-wal", "-shm"} {
-			os.Remove(h.DB() + x)
+		os.Remove(h.DB() + "-wal")
+		os.Remove(h.DB() + "-shm")
+	}
+	if e = os.Rename(staging, h.DB()); e != nil {
+		if kept != "" {
+			_ = os.Rename(kept, h.DB())
 		}
+		return "", fmt.Errorf("could not activate the restored memory; previous memory left in place: %w", e)
 	}
-	tmp := h.DB() + ".restoring"
-	if e = copyFile(backup, tmp); e != nil {
-		return "", e
-	}
-	if e = os.Rename(tmp, h.DB()); e != nil {
-		return "", e
-	}
+	swapped = true
 	if s, e := h.open(ctx, false); e != nil {
-		return "", fmt.Errorf("restored file did not open; previous memory kept at %s: %w", kept, e)
+		failed := h.DB() + ".failed-restore-" + time.Now().UTC().Format("20060102T150405Z")
+		_ = os.Rename(h.DB(), failed)
+		if kept != "" {
+			_ = os.Rename(kept, h.DB())
+		}
+		return "", fmt.Errorf("restored memory did not open, previous memory put back (failed copy at %s): %w", failed, e)
 	} else {
 		s.Close()
 	}

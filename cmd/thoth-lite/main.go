@@ -168,10 +168,16 @@ func run(ctx context.Context, args []string) error {
 		}
 		confirmed := len(rest) == 2 && rest[1] == "--confirm"
 		kept, e := lite.Restore(ctx, h, rest[0], confirmed)
-		if e == nil {
-			fmt.Printf("Restored. Previous memory kept at: %s\n", kept)
+		if e != nil {
+			return e
 		}
-		return e
+		if kept != "" {
+			fmt.Printf("Restored. Previous memory kept at: %s\n", kept)
+		} else {
+			fmt.Println("Restored into a new data directory.")
+		}
+		fmt.Println("Next: thoth-lite init (creates this machine's credentials), then thoth-lite connect all.")
+		return nil
 	case "import-ultralite":
 		from, rest := flag(rest, "--from")
 		file, rest := flag(rest, "--file")
