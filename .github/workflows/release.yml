@@ -36,7 +36,12 @@ jobs:
             os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
             name="thoth-lite-${version}-${os}-${arch}"
             mkdir -p "build/$name"
-            go build -trimpath -buildvcs=false -ldflags="-s -w" -o "build/$name/thoth-lite$ext" ./cmd/thoth-lite
+            binary="build/$name/thoth-lite$ext"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -buildvcs=false -ldflags="-s -w" -o "$binary" ./cmd/thoth-lite
+            # Validate the actual build target, not merely the archive filename.
+            metadata="$(go version -m "$binary")"
+            printf '%s\n' "$metadata" | grep -Fq "GOOS=$os"
+            printf '%s\n' "$metadata" | grep -Fq "GOARCH=$arch"
             cp LICENSE README.md THOTH_LITE_AGENT_PROTOCOL.md "build/$name/"
             if [ "$os" = windows ]; then (cd build && zip -qr "../dist/$name.zip" "$name"); else tar -C build -czf "dist/$name.tar.gz" "$name"; fi
           done
