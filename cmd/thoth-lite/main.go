@@ -49,6 +49,9 @@ Inspect memory (read-only, as the local owner):
                                 to PROJECT; refuses identities owned by another project
   projects unlink PROJECT IDENTITY [--yes]
   projects aliases PROJECT      identities linked to PROJECT
+  projects init-local [--dir PATH] [--name NAME]
+                                give a checkout without an origin remote a stable
+                                local:<uuid> identity (stored in its .git/config)
   brief PROJECT [--head SHA]    resume briefing; --head marks stale evidence
   search PROJECT QUERY          search records, tasks, events and evidence
   tasks PROJECT [--state S]     tasks, optionally by state
@@ -165,10 +168,16 @@ func run(ctx context.Context, args []string) error {
 		}
 		confirmed := len(rest) == 2 && rest[1] == "--confirm"
 		kept, e := lite.Restore(ctx, h, rest[0], confirmed)
-		if e == nil {
-			fmt.Printf("Restored. Previous memory kept at: %s\n", kept)
+		if e != nil {
+			return e
 		}
-		return e
+		if kept != "" {
+			fmt.Printf("Restored. Previous memory kept at: %s\n", kept)
+		} else {
+			fmt.Println("Restored into a new data directory.")
+		}
+		fmt.Println("Next: thoth-lite init (creates this machine's credentials), then thoth-lite connect all.")
+		return nil
 	case "import-ultralite":
 		from, rest := flag(rest, "--from")
 		file, rest := flag(rest, "--file")
@@ -472,6 +481,8 @@ func projectIdentities(ctx context.Context, h lite.Home, args []string) error {
 	}
 	defer release()
 	switch {
+	case len(rest) >= 1 && rest[0] == "init-local":
+		return initLocal(ctx, s, rest[1:])
 	case len(rest) == 2 && rest[0] == "aliases":
 		rows, e := s.Aliases(ctx, rest[1])
 		if e != nil {
@@ -511,4 +522,51 @@ func projectIdentities(ctx context.Context, h lite.Home, args []string) error {
 		return e
 	}
 	return errors.New("projects [link|unlink PROJECT IDENTITY [--yes] | aliases PROJECT]")
+}
+
+// initLocal binds a checkout without an origin remote to a local:<uuid>
+// project. The binding lives in that checkout's .git/config (never committed);
+// running it again reuses the existing binding.
+func initLocal(ctx context.Context, s *sqlite.Store, args []string) error {
+	dir, args := flag(args, "--dir")
+	name, args := flag(args, "--name")
+	if len(args) != 0 {
+		return errors.New("projects init-local [--dir PATH] [--name NAME]")
+	}
+	if dir == "" {
+		dir = "."
+	}
+	git := func(a ...string) (string, error) {
+		out, e := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, a...)...).Output()
+		return strings.TrimSpace(string(out)), e
+	}
+	top, e := git("rev-parse", "--show-toplevel")
+	if e != nil {
+		return errors.New("not a Git checkout: " + dir)
+	}
+	if remote, e := git("remote", "get-url", "origin"); e == nil && remote != "" {
+		return fmt.Errorf("this checkout has an origin remote (%s); agents use it as the identity, no local binding is needed", remote)
+	}
+	identity, _ := git("config", "--get", capture.BindingKey)
+	if identity == "" {
+		identity = "local:" + memory.NewID()
+		if _, e = git("config", "--local", capture.BindingKey, identity); e != nil {
+			return errors.New("could not write the binding to .git/config")
+		}
+	} else if identity, e = memory.CanonicalRepository(identity); e != nil {
+		return e
+	}
+	if name == "" {
+		name = filepath.Base(top)
+	}
+	if e = s.Register(ctx, lite.Owner); e != nil {
+		return e
+	}
+	v, e := s.Call(ctx, lite.Owner, "create_project", memory.Input{Name: name, Repository: identity})
+	if e != nil {
+		return e
+	}
+	row := v.(memory.Row)
+	fmt.Printf("Checkout %s is bound to %s (project %s, %q).\nIf you add an origin remote later, link it: thoth-lite projects link %s <remote>\n", top, identity, row["id"], row["name"], row["id"])
+	return nil
 }
