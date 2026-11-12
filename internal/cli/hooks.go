@@ -57,7 +57,7 @@ func HooksWith(ctx context.Context, args []string, launch []string, verify func(
 		if scope == "user" {
 			base = filepath.Join(ClientHome("opencode"), "plugins")
 		}
-		target := filepath.Join(base, "thothmemory.js")
+		target := filepath.Join(base, "thoth-lite.js")
 		if e = confirm([]string{target}, yes); e != nil {
 			return e
 		}
@@ -107,10 +107,16 @@ func HooksWith(ctx context.Context, args []string, launch []string, verify func(
 		if !ok {
 			return errors.New("existing hook event must be an array")
 		}
+		// Match this executable's own hook command exactly: an UltraLite hook for
+		// the same event (same "lifecycle agent phase" words) must not hide Lite's.
 		found := false
 		for _, v := range list {
-			if strings.Contains(string(jsonBytes(v)), " lifecycle "+agent+" "+phase+" ") {
-				found = true
+			g, _ := v.(map[string]any)
+			hs, _ := g["hooks"].([]any)
+			for _, h := range hs {
+				if hm, ok := h.(map[string]any); ok && hm["command"] == command {
+					found = true
+				}
 			}
 		}
 		if !found {
@@ -142,9 +148,9 @@ export const ThothMemory = async ({ directory, client }) => {
   const run = async phase => {
     try { return (await execute(%s, ['lifecycle','opencode',phase,...%s], { cwd:directory, timeout:20000, maxBuffer:131072 })).stdout; }
     catch {
-      const message = 'ThothMemory unavailable or project unregistered. Record unsynced progress honestly.';
+      const message = 'ThothMemory Lite unavailable or project unregistered. Record unsynced progress honestly.';
       try {
-        if (client?.app?.log) await client.app.log({ body: { service:'thothmemory', level:'warn', message } });
+        if (client?.app?.log) await client.app.log({ body: { service:'thoth-lite', level:'warn', message } });
         else console.warn(message);
       } catch { console.warn(message); }
       return message;

@@ -90,13 +90,13 @@ func Permissions(args []string) error {
 	if e = save(path, jsonBytes(out)); e != nil {
 		return e
 	}
-	// File is bind-mounted for the non-root runtime; the containing directory is private.
+	// The policy holds every token: owner-only, like the directory.
 	if e = privatePath(".secrets", true); e != nil {
 		return e
 	}
-	if e = os.Chmod(path, 0644); e != nil {
+	if e = privatePath(path, false); e != nil {
 		return e
 	}
-	fmt.Println("Policy saved; tokens unchanged. Reload requires owner action: docker compose up -d --no-deps --force-recreate app. Existing running requests retain their startup policy until then.")
+	fmt.Println("Policy saved; tokens unchanged. New agent sessions use it; sessions already running keep the policy they started with.")
 	return nil
 }

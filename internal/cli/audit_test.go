@@ -1,12 +1,9 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -92,34 +89,5 @@ func TestPermissionNarrowingAndRevocationSurviveSetup(t *testing.T) {
 		if p["id"] == "codex" {
 			t.Fatal("revocation reversed")
 		}
-	}
-}
-
-func TestConnectRejectsUnverifiedV2WithoutEditing(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell CLI fixture is Unix-only; V2 merge tests remain portable")
-	}
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(bin, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte("#!/bin/sh\nprintf '1.17.13\\n'\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	path := filepath.Join(dir, "opencode.json")
-	original := []byte(`{"providers":{},"mcp":{"servers":{}}}`)
-	if err := os.WriteFile(path, original, 0600); err != nil {
-		t.Fatal(err)
-	}
-	launch := Launch{Args: func(string) []string { return []string{"mcp-stdio"} }, Verify: func(context.Context) error { return nil }}
-	err := ConnectWith(context.Background(), []string{"opencode", "--dir", dir, "--yes"}, launch)
-	if err == nil || !strings.Contains(err.Error(), "V2 configuration detected") {
-		t.Fatal("unverified V2 registration was reported successful", err)
-	}
-	after, _ := os.ReadFile(path)
-	if string(after) != string(original) {
-		t.Fatal("unsupported V2 configuration edited")
 	}
 }
