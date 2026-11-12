@@ -1,0 +1,64 @@
+name: Release
+# Builds release archives for a version tag and creates a DRAFT GitHub release.
+# Publishing the draft is a manual owner step (see docs/RELEASE_CHECKLIST.md).
+# workflow_dispatch builds the same artifacts without creating a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/home" XDG_DATA_HOME="$RUNNER_TEMP/home/data" XDG_CONFIG_HOME="$RUNNER_TEMP/home/config"
+          mkdir -p "$HOME"
+          go test -count=1 ./...
+      - name: Build archives
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 android/arm64; do
+            os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
+            name="thoth-lite-${version}-${os}-${arch}"
+            mkdir -p "build/$name"
+            go build -trimpath -buildvcs=false -ldflags="-s -w" -o "build/$name/thoth-lite$ext" ./cmd/thoth-lite
+            cp LICENSE README.md THOTH_LITE_AGENT_PROTOCOL.md "build/$name/"
+            if [ "$os" = windows ]; then (cd build && zip -qr "../dist/$name.zip" "$name"); else tar -C build -czf "dist/$name.tar.gz" "$name"; fi
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@v5
+        with:
+          name: thoth-lite-release
+          path: dist/
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: thoth-lite-release
+          path: dist
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "ThothMemory Lite $GITHUB_REF_NAME" --notes "Draft. See CHANGELOG.md and docs/VALIDATION_REPORT.md."

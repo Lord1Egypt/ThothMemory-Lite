@@ -2,30 +2,15 @@
 
 Standalone, SQLite-only shared memory for AI coding agents, in one Go executable: `thoth-lite`.
 
-Agents (Claude Code, Codex, OpenCode and others) launch `thoth-lite mcp-stdio` as an MCP server and share
-one local SQLite memory: projects, sessions, checkpoints, tasks, decisions, issues, evidence and handoffs.
+Claude Code, Codex, OpenCode, Antigravity, Cline, Roo Code, Cursor and Continue launch `thoth-lite mcp-stdio`
+as an MCP server and share one local memory: projects, sessions, checkpoints, tasks, decisions, issues,
+evidence and handoffs. A new agent session picks up exactly where another agent, or another client, left off.
 There is no database server, no network listener, no Docker and no paid API.
 
-**Status: in development (0.1.0-dev).** Nothing is released yet. This README describes only what is
-implemented on `main`.
+**Status: 0.1.0-dev, not released.** Successor to ThothMemory UltraLite 0.1.0 ([provenance](docs/PROVENANCE.md)).
+What is verified, and how, is in [docs/VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md).
 
-## What works today
-
-| Area | State |
-|---|---|
-| MCP stdio server (official Go MCP SDK) with per-agent credentials and project scopes | carried over from UltraLite, tested |
-| SQLite engine: pure Go (no CGO), WAL, `synchronous=FULL`, foreign keys, append-only history triggers, idempotent operations, optimistic revisions, checksummed transactional migrations | carried over, tested |
-| CLI inspection: `projects`, `brief`, `search`, `tasks`, `timeline`, `call` | carried over, tested |
-| Local backup (`VACUUM INTO` snapshot + SHA-256 sidecar) and verified restore that keeps the previous database | carried over, tested |
-| Portable project export/import | carried over, tested (SQLite to SQLite) |
-| `import-ultralite`: copy UltraLite memory into Lite without writing to the UltraLite files | new, tested (including against a live WAL) |
-| Project identity aliases (`projects link`), `memory_resolve_project`, observed client handshakes | new (schema 002, 003), tested |
-| Upgrade of UltraLite 0.1.0 databases (every original row preserved; partial migrations roll back; newer schemas refused) | tested against a fixture written by the original code |
-| Client adapters for Claude Code, Codex, OpenCode (1.x and 2.x), Antigravity, Cline, Roo Code, Cursor, Continue: `connect`, `disconnect`, `integrations list/capabilities/doctor` | new; runtime status per client in [docs/CLIENT_COMPATIBILITY.md](docs/CLIENT_COMPATIBILITY.md) |
-| Agent protocol v2 ("record every step that changes the state of the work") installed for all eight clients by `thoth-lite instructions` | new, tested |
-| Automatic lifecycle capture: Claude/Codex hooks, OpenCode 1.x and 2.x plugins | OpenCode 2.2.7 verified in a real run; others carried over / contract-tested |
-
-## Install from source
+## Install
 
 ```bash
 go install github.com/Lord1Egypt/ThothMemory-Lite/cmd/thoth-lite@latest   # Go 1.26.11+, no CGO
@@ -33,14 +18,64 @@ thoth-lite init        # creates ~/.local/share/thoth-lite (override: --data DIR
 thoth-lite doctor      # permissions, integrity, and a real MCP stdio session
 ```
 
-Coming from ThothMemory UltraLite? Lite keeps its own data directory so it never upgrades your UltraLite
-database in place. Copy your memory with:
+Prebuilt archives for linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and android/arm64 will be
+attached to releases. Android builds are cross-compiled and not runtime-tested.
+
+## Connect your agents
 
 ```bash
-thoth-lite import-ultralite            # reads ~/.local/share/thothmemory (or THOTH_HOME); never writes to it
-thoth-lite import-ultralite --file BACKUP.db
+thoth-lite connect all --dir ~/src/my-project          # every detected client, project scope
+thoth-lite connect claude --scope user                 # one client, user scope
+thoth-lite instructions --dir ~/src/my-project         # the memory protocol, in each client's instruction file
+thoth-lite hooks claude --dir ~/src/my-project         # automatic lifecycle capture (claude, codex, opencode)
+thoth-lite integrations doctor                         # what is configured, connected and observed
 ```
 
-## Provenance and license
+`connect` shows every file it will change, asks first, backs up what it replaces, and never overwrites a
+different existing registration. The agent protocol tells agents to **record every step that changes the
+state of the work** (requests, decisions, failures, test runs, commits, task changes) and to checkpoint and
+hand off honestly. Per-client status, with evidence: [docs/CLIENT_COMPATIBILITY.md](docs/CLIENT_COMPATIBILITY.md).
 
-Derived from ThothMemory UltraLite at commit `0ff63ab`; see [docs/PROVENANCE.md](docs/PROVENANCE.md). MIT license.
+## Day to day
+
+```bash
+thoth-lite projects                      # every project: activity, blockers, next action
+thoth-lite brief PROJECT --head SHA      # resume briefing; marks evidence from other commits stale
+thoth-lite search PROJECT "query"        # Arabic, English, identifiers, commit prefixes
+thoth-lite tasks PROJECT | timeline PROJECT
+thoth-lite projects init-local           # a checkout with no git remote gets a stable local:<uuid>
+thoth-lite projects link PROJECT REMOTE  # a remote added later resolves to the same project
+thoth-lite backup /media/usb/memory.db   # consistent snapshot + .sha256
+thoth-lite restore FILE --confirm        # verified, staged, previous memory kept
+thoth-lite capture status|set MODE|retry
+thoth-lite permissions PRINCIPAL --projects UUID --read-only | --revoke
+```
+
+## Coming from ThothMemory UltraLite
+
+Lite keeps its own data directory and never opens UltraLite's on its own, so both can stay installed. Copy
+your memory (UltraLite's files are only read):
+
+```bash
+thoth-lite import-ultralite            # or --from DIR, or --file BACKUP.db
+thoth-lite connect all
+```
+
+See [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | processes, packages, locking |
+| [DATABASE_SCHEMA](docs/DATABASE_SCHEMA.md), [SCHEMA_AUDIT](docs/SCHEMA_AUDIT.md) | tables, migrations, and why |
+| [CLIENT_COMPATIBILITY](docs/CLIENT_COMPATIBILITY.md) | eight clients, evidence per client, OpenCode 1.x/2.x |
+| [AUTOMATIC_MEMORY](docs/AUTOMATIC_MEMORY.md) | protocol, lifecycle capture, project resolution, handoffs |
+| [DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md) | local backup, restore, new-machine recovery |
+| [SECURITY](docs/SECURITY.md) | model, controls, findings fixed |
+| [PERFORMANCE](docs/PERFORMANCE.md) | measured numbers vs UltraLite |
+| [VALIDATION_REPORT](docs/VALIDATION_REPORT.md), [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) | evidence and release gates |
+
+## License
+
+MIT. Derived from ThothMemory UltraLite at commit `0ff63ab`; see [docs/PROVENANCE.md](docs/PROVENANCE.md).

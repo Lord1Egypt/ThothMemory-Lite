@@ -130,6 +130,8 @@ func main() {
 	projects := flag.Int("projects", 3, "projects")
 	events := flag.Int("events", 10000, "events per project")
 	reps := flag.Int("reps", 20, "repetitions per query")
+	mode := flag.String("mode", "search", "search | ops")
+	writers := flag.Int("writers", 4, "concurrent writers (ops mode)")
 	flag.Parse()
 	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "thoth-bench -dir SCRATCH [-projects N] [-events N]")
@@ -149,6 +151,16 @@ func main() {
 		panic(e)
 	}
 	defer s.Close()
+	if *mode == "ops" {
+		out, e := ops(ctx, s, *dir, *reps, *writers)
+		if e != nil {
+			panic(e)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return
+	}
 	t := time.Now()
 	project, samples, e := seed(ctx, s, *projects, *events)
 	if e != nil {
@@ -187,4 +199,90 @@ func main() {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(out)
+}
+
+func percentiles(lat []float64) map[string]float64 {
+	sort.Float64s(lat)
+	return map[string]float64{"p50_ms": lat[len(lat)/2], "p95_ms": lat[len(lat)*95/100], "max_ms": lat[len(lat)-1], "samples": float64(len(lat))}
+}
+
+// ops measures the MCP tool layer directly: durable writes (synchronous=FULL,
+// one transaction and fsync each), briefing reads, concurrent writers and
+// backup/restore throughput.
+func ops(ctx context.Context, s *sqlite.Store, dir string, n, writers int) (map[string]any, error) {
+	p := memory.Principal{ID: "bench", Write: true, Projects: []string{"*"}}
+	if e := s.Register(ctx, p); e != nil {
+		return nil, e
+	}
+	v, e := s.Call(ctx, p, "create_project", memory.Input{Name: "ops", Repository: "https://github.com/bench/ops"})
+	if e != nil {
+		return nil, e
+	}
+	project := v.(memory.Row)["id"].(string)
+	timeIt := func(f func(i int) error) (map[string]float64, error) {
+		var lat []float64
+		for i := 0; i < n; i++ {
+			t := time.Now()
+			if e := f(i); e != nil {
+				return nil, e
+			}
+			lat = append(lat, float64(time.Since(t).Microseconds())/1000)
+		}
+		return percentiles(lat), nil
+	}
+	out := map[string]any{"iterations": n}
+	var err error
+	if out["append_event"], err = timeIt(func(i int) error {
+		_, e := s.Call(ctx, p, "append_event", memory.Input{ProjectID: project, OperationID: fmt.Sprintf("bench-event-%06d", i), Body: "benchmark progress event with some realistic length of text"})
+		return e
+	}); err != nil {
+		return nil, err
+	}
+	if out["record_decision"], err = timeIt(func(i int) error {
+		_, e := s.Call(ctx, p, "record_decision", memory.Input{ProjectID: project, OperationID: fmt.Sprintf("bench-dec-%06d", i), Title: fmt.Sprint("Decision ", i), Body: "Because of measured reasons."})
+		return e
+	}); err != nil {
+		return nil, err
+	}
+	if out["get_project_context"], err = timeIt(func(int) error {
+		_, e := s.Call(ctx, p, "get_project_context", memory.Input{ProjectID: project})
+		return e
+	}); err != nil {
+		return nil, err
+	}
+	// Concurrent writers, each with its own connection pool, like separate agents.
+	start := time.Now()
+	errs := make(chan error, writers)
+	for w := 0; w < writers; w++ {
+		go func(w int) {
+			st, e := sqlite.Open(ctx, filepath.Join(dir, "bench.db"))
+			if e != nil {
+				errs <- e
+				return
+			}
+			defer st.Close()
+			for i := 0; i < n; i++ {
+				if _, e = st.Call(ctx, p, "append_event", memory.Input{ProjectID: project, OperationID: fmt.Sprintf("bench-w%02d-%06d", w, i), Body: "concurrent write"}); e != nil {
+					errs <- e
+					return
+				}
+			}
+			errs <- nil
+		}(w)
+	}
+	for w := 0; w < writers; w++ {
+		if e := <-errs; e != nil {
+			return nil, e
+		}
+	}
+	el := time.Since(start).Seconds()
+	out["concurrent_writers"] = map[string]float64{"writers": float64(writers), "writes": float64(writers * n), "seconds": el, "writes_per_second": float64(writers*n) / el}
+	backup := filepath.Join(dir, "bench-backup.db")
+	t := time.Now()
+	if _, e := s.Backup(ctx, backup); e != nil {
+		return nil, e
+	}
+	st, _ := os.Stat(backup)
+	out["backup"] = map[string]float64{"bytes": float64(st.Size()), "seconds": time.Since(t).Seconds()}
+	return out, nil
 }

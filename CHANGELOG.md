@@ -3,6 +3,10 @@
 ## Unreleased (0.1.0-dev)
 
 ### Added
+- `thoth-lite projects init-local` (checkouts without a remote) and any-event project registration in capture.
+- Staged, verified restore with rollback; disaster-recovery tests; `scripts/real-client-handoff.sh`.
+- Release workflow (draft releases only), benchmark `ops` mode, and documentation: ARCHITECTURE, SECURITY,
+  PERFORMANCE, AUTOMATIC_MEMORY, DISASTER_RECOVERY, CLIENT_COMPATIBILITY, RELEASE_CHECKLIST, VALIDATION_REPORT.
 - Client adapters for eight clients with plan/apply/backup/uninstall/verify: `connect`, `disconnect`,
   `integrations list|capabilities|doctor`. OpenCode: version-aware V2 configuration (accepted from 1.18.24,
   measured), OpenCode 2 plugin API, OpenCode 2 service-API verification.
