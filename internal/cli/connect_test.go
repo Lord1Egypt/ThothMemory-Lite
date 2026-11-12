@@ -85,3 +85,14 @@ func TestCodexExtendsInlineOtherServer(t *testing.T) {
 		t.Fatal(e, string(out))
 	}
 }
+
+func TestOpenCodeNewFileUsesV2OnOpenCode2(t *testing.T) {
+	schema, keys, _, e := OpenCodeEntry(map[string]any{}, "opencode v2.2.7", []string{"x"})
+	if e != nil || schema != "v2" || strings.Join(keys, ".") != "mcp.servers" {
+		t.Fatal(schema, keys, e)
+	}
+	schema, _, _, _ = OpenCodeEntry(map[string]any{"model": "a"}, "2.2.7", []string{"x"})
+	if schema != "legacy" {
+		t.Fatal("existing legacy file must keep its shape", schema)
+	}
+}

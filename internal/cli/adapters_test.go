@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeEnv simulates installed clients: versions maps a binary to its
@@ -234,5 +235,33 @@ func TestEnsureCredentialNeverRestoresRevoked(t *testing.T) {
 	}
 	if err := EnsureCredential(dir, "cline"); err == nil || !strings.Contains(err.Error(), "revoked") {
 		t.Fatal("revoked credential was restored:", err)
+	}
+}
+
+func TestOpenCodeV2RuntimeCheckPollsServiceAPI(t *testing.T) {
+	ctx := context.Background()
+	opencodePoll = time.Millisecond
+	t.Cleanup(func() { opencodePoll = 1500 * time.Millisecond })
+	answers := []string{`{"data":[{"name":"thoth-lite","status":{"status":"pending"}}]}`, `{"data":[{"name":"thoth-lite","status":{"status":"connected"}}]}`}
+	env := fakeEnv(t, map[string]string{"opencode": "opencode v2.2.7"}, nil)
+	n := 0
+	env.Run = func(_ context.Context, _ string, name string, args ...string) (string, error) {
+		if len(args) == 1 {
+			return "opencode v2.2.7", nil
+		}
+		if strings.Join(args[:2], " ") != "api GET" || !strings.Contains(args[2], "location[directory]="+env.Dir) {
+			t.Fatalf("unexpected call %v", args)
+		}
+		a := answers[min(n, len(answers)-1)]
+		n++
+		return a, nil
+	}
+	c := opencodeV2Status(ctx, env, ClientInfo{Installed: true, Executable: "/fake/bin/opencode", Version: "2.2.7"})
+	if c.Status != "verified" || n != 2 {
+		t.Fatalf("%+v after %d calls", c, n)
+	}
+	env.Run = func(context.Context, string, string, ...string) (string, error) { return `{"data":[]}`, nil }
+	if c = opencodeV2Status(ctx, env, ClientInfo{Installed: true, Executable: "/fake/bin/opencode", Version: "2.2.7"}); c.Status != "not-run" {
+		t.Fatalf("empty status must be not-run, got %+v", c)
 	}
 }

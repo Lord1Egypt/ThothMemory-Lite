@@ -423,7 +423,8 @@ func (opencodeAdapter) Capabilities() Capabilities {
 		ConfigFiles:  []string{"project: opencode.json(c)", "user: ~/.config/opencode/opencode.json(c) (or $XDG_CONFIG_HOME)"},
 		Instructions: "AGENTS.md",
 		Lifecycle:    "plugin .opencode/plugins/thoth-lite.js: session start context, idle, error, compaction (thoth-lite hooks opencode)",
-		RuntimeCheck: "opencode mcp list (starts the server and reports connected)"}
+		RuntimeCheck: "1.x: opencode mcp list (starts the server); 2.x: the OpenCode service API for this directory",
+		Notes:        "OpenCode 2 needs the V2 plugin API; `thoth-lite hooks opencode` writes .opencode/plugins/thoth-lite/index.js for 2.x and thoth-lite.js for 1.x."}
 }
 func (a opencodeAdapter) ConfigPath(e Env, s Scope) (string, error) {
 	base := e.Dir
@@ -465,6 +466,11 @@ func OpenCodeEntry(m map[string]any, version string, command []string) (schema s
 	schema, err = OpenCodeSchema(m)
 	if err != nil {
 		return "", nil, nil, err
+	}
+	// A new configuration for OpenCode 2 uses the V2 shape, as `opencode mcp
+	// add` does there; existing legacy files keep their shape (2.x reads both).
+	if v, ok := ParseVersion(version); ok && v[0] >= 2 && len(m) == 0 {
+		schema = "v2"
 	}
 	if schema == "v2" {
 		v, ok := ParseVersion(version)
@@ -551,13 +557,67 @@ func (a opencodeAdapter) Verify(ctx context.Context, e Env, s Scope) Report {
 		_, ok := sv[ServerName]
 		return ok
 	})}}
-	r.Checks = append(r.Checks, runtimeCheck(ctx, e, a.Detect(ctx, e), []string{"mcp", "list"}, func(l string) (string, string) {
+	info := a.Detect(ctx, e)
+	if v, ok := ParseVersion(info.Version); ok && v[0] >= 2 {
+		return append2(r, opencodeV2Status(ctx, e, info))
+	}
+	r.Checks = append(r.Checks, runtimeCheck(ctx, e, info, []string{"mcp", "list"}, func(l string) (string, string) {
 		if strings.Contains(l, "connected") && !strings.Contains(l, "failed") {
 			return "verified", "connected"
 		}
 		return "failed", l
 	}))
 	return r
+}
+
+// opencodeV2Status asks a running OpenCode 2 server for this directory's MCP
+// status. OpenCode 2's own `mcp list` does not pass the working directory, and
+// a --standalone server returns before MCP servers connect, so the background
+// service is the only reliable source. It is never started here.
+// opencodePoll is the delay between OpenCode 2 status queries.
+var opencodePoll = 1500 * time.Millisecond
+
+func opencodeV2Status(ctx context.Context, e Env, info ClientInfo) Check {
+	last := ""
+	// The first request for a directory starts its MCP connections, so poll
+	// briefly while the server reports them pending.
+	for attempt := 0; attempt < 8; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return Check{"client-runtime", "not-run", ctx.Err().Error()}
+			case <-time.After(opencodePoll):
+			}
+		}
+		out, err := e.Run(ctx, e.Dir, info.Executable, "api", "GET", "/api/mcp?location[directory]="+e.Dir)
+		var resp struct {
+			Data []struct {
+				Name   string `json:"name"`
+				Status struct {
+					Status string `json:"status"`
+				} `json:"status"`
+			} `json:"data"`
+		}
+		if err != nil || json.Unmarshal([]byte(strings.TrimSpace(out)), &resp) != nil {
+			return Check{"client-runtime", "not-run", "OpenCode " + info.Version + " service not reachable (start it with `opencode service start`); configuration was checked only"}
+		}
+		for _, s := range resp.Data {
+			if s.Name != ServerName {
+				continue
+			}
+			switch last = s.Status.Status; last {
+			case "connected":
+				return Check{"client-runtime", "verified", "OpenCode " + info.Version + " service reports connected"}
+			case "pending", "connecting":
+				continue
+			}
+			return Check{"client-runtime", "failed", "OpenCode " + info.Version + " service reports " + last}
+		}
+	}
+	if last != "" {
+		return Check{"client-runtime", "pending", "OpenCode " + info.Version + " service still reports " + last}
+	}
+	return Check{"client-runtime", "not-run", "OpenCode " + info.Version + " returned no MCP status for this directory (is `opencode service start` running?); configuration was checked only"}
 }
 
 // ---------------------------------------------------------------- Antigravity
