@@ -1,0 +1,84 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests (isolated HOME, never a real memory)
+        shell: bash
+        run: |
+          export HOME="$RUNNER_TEMP/home" XDG_DATA_HOME="$RUNNER_TEMP/home/data" XDG_CONFIG_HOME="$RUNNER_TEMP/home/config"
+          mkdir -p "$HOME"
+          go test -count=1 ./...
+      - name: CLI smoke test
+        shell: bash
+        run: |
+          bin="$RUNNER_TEMP/thoth-lite$(go env GOEXE)"
+          go build -o "$bin" ./cmd/thoth-lite
+          "$bin" --data "$RUNNER_TEMP/smoke" init
+          "$bin" --data "$RUNNER_TEMP/smoke" doctor
+          "$bin" --data "$RUNNER_TEMP/smoke" backup "$RUNNER_TEMP/smoke-backup.db"
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: No PostgreSQL/MariaDB dependencies
+        run: |
+          if grep -nE 'jackc/pgx|go-sql-driver/mysql|lib/pq' go.mod go.sum; then echo "server database driver found"; exit 1; fi
+
+  cross-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build every target twice and compare (reproducibility)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 android/arm64; do
+            os=${target%/*}; arch=${target#*/}; ext=""
+            [ "$os" = windows ] && ext=".exe"
+            for n in 1 2; do
+              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags="-s -w" -o "out$n/thoth-lite-$os-$arch$ext" ./cmd/thoth-lite
+            done
+            cmp "out1/thoth-lite-$os-$arch$ext" "out2/thoth-lite-$os-$arch$ext"
+          done
+          ls -l out1
+          sha256sum out1/*
+      - uses: actions/upload-artifact@v5
+        with:
+          name: thoth-lite-cross-build
+          path: out1/
+          retention-days: 14
