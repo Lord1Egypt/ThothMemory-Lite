@@ -114,7 +114,15 @@ type Event struct {
 	Stdin []byte // hook payload JSON, if the client provides one
 }
 
-type repo struct{ head, branch, remote, identity, name string }
+// repo is what Git says about the checkout. identity is the canonical origin
+// remote; bound is the checkout's explicit binding (git config
+// thoth-lite.project), used for checkouts without a remote.
+type repo struct{ head, branch, remote, identity, name, bound string }
+
+// BindingKey is the per-checkout Git config key that binds a checkout to a
+// project identity (normally local:<uuid>). It lives in .git/config, so it is
+// never committed and each checkout keeps its own.
+const BindingKey = "thoth-lite.project"
 
 func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -130,15 +138,25 @@ func detect(ctx context.Context, dir string) (repo, error) {
 		return r, errors.New("not a Git checkout with a commit; select the project explicitly")
 	}
 	r.branch, _ = gitOut(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
-	remote, e := gitOut(ctx, dir, "remote", "get-url", "origin")
-	if e != nil {
-		return r, errors.New("no origin remote; register a local:<uuid> project explicitly")
+	if bound, err := gitOut(ctx, dir, "config", "--get", BindingKey); err == nil && bound != "" {
+		if r.bound, e = memory.CanonicalRepository(bound); e != nil {
+			return r, fmt.Errorf("git config %s is not a valid identity: %w", BindingKey, e)
+		}
 	}
-	r.remote = remote
-	if r.identity, e = memory.CanonicalRepository(remote); e != nil {
-		return r, e
+	if remote, err := gitOut(ctx, dir, "remote", "get-url", "origin"); err == nil && remote != "" {
+		r.remote = remote
+		if r.identity, e = memory.CanonicalRepository(remote); e != nil {
+			return r, e
+		}
 	}
-	r.name = r.identity[strings.LastIndex(r.identity, "/")+1:]
+	if r.identity == "" && r.bound == "" {
+		return r, errors.New("no origin remote and no project binding; run `thoth-lite projects init-local` in this checkout (or add an origin remote)")
+	}
+	top, _ := gitOut(ctx, dir, "rev-parse", "--show-toplevel")
+	r.name = filepath.Base(top)
+	if r.identity != "" {
+		r.name = r.identity[strings.LastIndex(r.identity, "/")+1:]
+	}
 	return r, nil
 }
 
@@ -189,20 +207,9 @@ func Run(ctx context.Context, c Caller, d Dir, ev Event, out io.Writer) error {
 	if flushed > 0 || left > 0 {
 		fmt.Fprintf(os.Stderr, "ThothMemory: replayed %d queued write(s); %d still pending\n", flushed, left)
 	}
-	project, e := findProject(ctx, c, r)
+	project, e := resolveProject(ctx, c, r)
 	if e != nil {
 		return e
-	}
-	if project == "" {
-		if ev.Name != "start" {
-			return errors.New("project not registered; the start event registers it")
-		}
-		// The canonical repository is the natural key: this cannot duplicate a project.
-		v, e := c.Call(ctx, "create_project", map[string]any{"name": r.name, "repository": r.remote})
-		if e != nil {
-			return fmt.Errorf("project %s is not registered and this credential cannot register it: %w", r.identity, e)
-		}
-		project = v.(map[string]any)["id"].(string)
 	}
 	st := loadState(d, project, ev.Agent)
 	defer st.save()
@@ -241,23 +248,57 @@ func short(rev string) string {
 	return rev
 }
 
-func findProject(ctx context.Context, c Caller, r repo) (string, error) {
-	for offset := 0; offset <= 10000; offset += 100 {
-		v, e := c.Call(ctx, "list_projects", map[string]any{"limit": 100, "offset": offset})
+// resolveProject maps the checkout to one project. Order: the origin remote
+// (including identities the owner linked), then the checkout's binding. A
+// project missing from memory is registered by its identity on any event: the
+// identity is the natural key, so this cannot create a duplicate. A remote
+// that is not linked while the checkout is bound to another project is not
+// auto-linked (it could belong to a different project); the binding is used
+// and the owner is told how to link them.
+func resolveProject(ctx context.Context, c Caller, r repo) (string, error) {
+	find := func(identity string) (string, error) {
+		v, e := c.Call(ctx, "resolve_project", map[string]any{"repository": identity})
 		if e != nil {
 			return "", e
 		}
-		rows := asRows(v)
-		for _, p := range rows {
-			if p["repository"] == r.identity {
-				return fmt.Sprint(p["id"]), nil
-			}
+		if m, ok := v.(map[string]any); ok && m["found"] == true {
+			return fmt.Sprint(m["id"]), nil
 		}
-		if len(rows) < 100 {
-			break
+		return "", nil
+	}
+	if r.identity != "" {
+		id, e := find(r.identity)
+		if e != nil || id != "" {
+			return id, e
 		}
 	}
-	return "", nil
+	if r.bound != "" {
+		id, e := find(r.bound)
+		if e != nil {
+			return "", e
+		}
+		if id != "" {
+			if r.identity != "" {
+				fmt.Fprintf(os.Stderr, "ThothMemory: origin %s is not linked to this checkout's project %s; using the binding. If they are the same project, run: thoth-lite projects link %s %s\n", r.identity, id, id, r.identity)
+			}
+			return id, nil
+		}
+	}
+	// create_project takes the remote URL (or local:<uuid>) and canonicalizes it.
+	identity, repository := r.identity, r.remote
+	if identity == "" {
+		identity, repository = r.bound, r.bound
+	}
+	v, e := c.Call(ctx, "create_project", map[string]any{"name": r.name, "repository": repository})
+	if e != nil {
+		return "", fmt.Errorf("project %s is not registered and this credential cannot register it: %w", identity, e)
+	}
+	m, _ := v.(map[string]any)
+	id, _ := m["id"].(string)
+	if id == "" {
+		return "", errors.New("create_project returned no project")
+	}
+	return id, nil
 }
 
 // openSession returns this agent's unfinished session from context, if any.
