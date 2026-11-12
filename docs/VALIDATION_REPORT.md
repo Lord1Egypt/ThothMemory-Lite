@@ -22,7 +22,7 @@ such and are weaker.
 | [#2](https://github.com/Lord1Egypt/ThothMemory-Lite/pull/2) | 2 schema, aliases, integrations | `678d0c2`, `4eb3654` | 7/7 pass |
 | [#3](https://github.com/Lord1Egypt/ThothMemory-Lite/pull/3) | 3 client adapters, OpenCode 1.x/2.x | `28ef985`, `52d8a07` | 7/7 pass |
 | [#4](https://github.com/Lord1Egypt/ThothMemory-Lite/pull/4) | 4–5 capture fixes, handoff, restore | `d823fdb`, `d3239e0` | 7/7 pass |
-| #5 | 6–7 packaging, docs, qualification | this branch | see the PR |
+| [#5](https://github.com/Lord1Egypt/ThothMemory-Lite/pull/5) | 6–7 packaging, docs, qualification | `2a4007b` + this report update | 7/7 pass |
 
 CI jobs: tests on ubuntu-24.04 (amd64), ubuntu-24.04-arm, windows-2025 and macos-15; `security` (govulncheck,
 no server database drivers); `cross-build` (5 targets built twice and compared byte-for-byte); GitGuardian.
