@@ -30,8 +30,14 @@ import (
 const usage = `ThothMemory Lite %s (SQLite; headless: no server, no web UI)
 
   init                          create the data directory, credentials and database
-  connect codex|claude|opencode|all [--scope project|user] [--dir PATH] [--yes]
-                                register clients to launch memory directly (mcp-stdio)
+  connect CLIENT|all [--scope project|user] [--dir PATH] [--yes] [--dry-run]
+                                register thoth-lite with claude, codex, opencode, antigravity,
+                                cline, roo, cursor or continue (all = every detected client);
+                                shows each file first and backs up anything it changes
+  disconnect CLIENT|all [...]   remove only the thoth-lite entries
+  integrations list|capabilities|doctor [CLIENT] [--scope S] [--dir PATH]
+                                detected clients, what Lite implements for each, and
+                                real verification (client CLI checks, observed sessions)
   doctor                        verify files, permissions, integrity and a real MCP session
   mcp-stdio --token-file FILE   serve one client over stdin/stdout (clients launch this)
   status                        storage usage and counts
@@ -215,12 +221,36 @@ func run(ctx context.Context, args []string) error {
 			return e
 		}
 		return json.NewEncoder(os.Stdout).Encode(v)
-	case "connect":
-		return cli.ConnectWith(ctx, rest, cli.Launch{
-			Args: func(client string) []string {
-				return []string{"mcp-stdio", "--data", dir, "--token-file", filepath.Join(h.Secrets(), client+"_token")}
-			},
-			Verify: func(ctx context.Context) error { return doctor(ctx, h) },
+	case "connect", "disconnect":
+		exe, e := os.Executable()
+		if e != nil {
+			return e
+		}
+		envFor := func(d string) cli.Env { return cli.DefaultEnv(d, cli.LaunchFor(exe, dir, h.Secrets())) }
+		o, env, e := cli.ParseClientArgs(ctx, rest, envFor)
+		if e != nil {
+			return e
+		}
+		if cmd == "disconnect" {
+			return cli.Disconnect(ctx, o, env)
+		}
+		if _, e = os.Stat(h.DB()); e != nil {
+			return errors.New("no memory yet; run: thoth-lite init")
+		}
+		return cli.Connect(ctx, o, env, func(client string) error { return cli.EnsureCredential(h.Secrets(), client) })
+	case "integrations":
+		exe, e := os.Executable()
+		if e != nil {
+			return e
+		}
+		envFor := func(d string) cli.Env { return cli.DefaultEnv(d, cli.LaunchFor(exe, dir, h.Secrets())) }
+		return cli.Integrations(ctx, rest, envFor, func(ctx context.Context) ([]memory.Row, error) {
+			s, release, e := lite.Open(ctx, h)
+			if e != nil {
+				return nil, e
+			}
+			defer release()
+			return s.Integrations(ctx)
 		})
 	case "lifecycle":
 		if len(rest) < 2 {

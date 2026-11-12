@@ -21,7 +21,9 @@ implemented on `main`.
 | `import-ultralite`: copy UltraLite memory into Lite without writing to the UltraLite files | new, tested (including against a live WAL) |
 | Project identity aliases (`projects link`), `memory_resolve_project`, observed client handshakes | new (schema 002, 003), tested |
 | Upgrade of UltraLite 0.1.0 databases (every original row preserved; partial migrations roll back; newer schemas refused) | tested against a fixture written by the original code |
-| Client registration, lifecycle hooks and instructions for Codex, Claude Code and OpenCode | carried over; to be reworked and runtime-verified |
+| Client adapters for Claude Code, Codex, OpenCode (1.x and 2.x), Antigravity, Cline, Roo Code, Cursor, Continue: `connect`, `disconnect`, `integrations list/capabilities/doctor` | new; runtime status per client in [docs/CLIENT_COMPATIBILITY.md](docs/CLIENT_COMPATIBILITY.md) |
+| Agent protocol v2 ("record every step that changes the state of the work") installed for all eight clients by `thoth-lite instructions` | new, tested |
+| Automatic lifecycle capture: Claude/Codex hooks, OpenCode 1.x and 2.x plugins | OpenCode 2.2.7 verified in a real run; others carried over / contract-tested |
 
 ## Install from source
 

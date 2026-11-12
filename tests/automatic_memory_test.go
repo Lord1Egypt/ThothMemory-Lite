@@ -157,7 +157,7 @@ func TestAutomaticMemoryEndToEnd(t *testing.T) {
 	if out, e := f.ul("", nil, "instructions", "--dir", f.repo, "--yes"); e != nil {
 		t.Fatal(out)
 	}
-	if b, _ = os.ReadFile(filepath.Join(f.repo, "CLAUDE.md")); !strings.Contains(string(b), "@THOTHMEMORY_AGENT_PROTOCOL.md") {
+	if b, _ = os.ReadFile(filepath.Join(f.repo, "CLAUDE.md")); !strings.Contains(string(b), "@THOTH_LITE_AGENT_PROTOCOL.md") {
 		t.Fatal("CLAUDE.md does not reference the protocol")
 	}
 	if out, e := f.ul("", nil, "hooks", "codex", "--dir", f.repo, "--yes"); e != nil {

@@ -3,6 +3,19 @@
 ## Unreleased (0.1.0-dev)
 
 ### Added
+- Client adapters for eight clients with plan/apply/backup/uninstall/verify: `connect`, `disconnect`,
+  `integrations list|capabilities|doctor`. OpenCode: version-aware V2 configuration (accepted from 1.18.24,
+  measured), OpenCode 2 plugin API, OpenCode 2 service-API verification.
+- Per-client credentials (antigravity, cline, roo, cursor, continue added); revoked credentials are never
+  recreated.
+- Agent protocol v2 (`THOTH_LITE_AGENT_PROTOCOL.md`): mandatory record-every-step triggers and checkpoint
+  cadence; installed for all eight clients in their native instruction files.
+
+### Fixed
+- `permissions` no longer makes `tokens.json` world-readable (0644 leftover from the Docker edition).
+- Lifecycle capture could hang an agent turn when the launcher left stdin open (OpenCode plugins); stdin is
+  now closed by the plugins and read with a deadline.
+- Lite's instruction block and hooks no longer collide with UltraLite's when both are installed.
 - Schema `002_project_aliases.sql`: identity aliases so a project registered as `local:<uuid>` can later be
   reached by its Git remote without a duplicate project; owner-only `thoth-lite projects link|unlink|aliases`;
   read tool `memory_resolve_project`.

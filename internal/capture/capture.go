@@ -407,11 +407,26 @@ func (s *state) save() {
 }
 
 // ReadStdin returns up to 64 KiB of piped input and nothing from a terminal.
+//
+// Hook clients send their payload and close stdin, but a launcher may leave
+// stdin open and silent (Node's execFile does), so reading stops after
+// stdinWait: a lifecycle event must never hang its client.
 func ReadStdin(f *os.File) []byte {
 	st, e := f.Stat()
 	if e != nil || st.Mode()&os.ModeCharDevice != 0 {
 		return nil
 	}
-	b, _ := io.ReadAll(io.LimitReader(f, 64<<10))
-	return bytes.TrimSpace(b)
+	done := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+		done <- bytes.TrimSpace(b)
+	}()
+	select {
+	case b := <-done:
+		return b
+	case <-time.After(stdinWait):
+		return nil
+	}
 }
+
+var stdinWait = 2 * time.Second
