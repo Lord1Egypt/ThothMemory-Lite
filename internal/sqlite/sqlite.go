@@ -4,6 +4,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -174,7 +176,7 @@ func (s *Store) current(ctx context.Context) bool {
 	}
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		var sum string
 		if s.DB.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=?", f.Name()).Scan(&sum) != nil || sum != hex.EncodeToString(h[:]) {
 			return false
@@ -185,7 +187,13 @@ func (s *Store) current(ctx context.Context) bool {
 
 func (s *Store) migrate(ctx context.Context) error {
 	if s.current(ctx) {
-		return nil // opening a healthy database must not need the write lock
+		// Opening a healthy database must not need the write lock, but it must
+		// still refuse a schema written by a newer thoth-lite.
+		files, e := schema.ReadDir("schema")
+		if e != nil {
+			return e
+		}
+		return refuseUnknown(ctx, s.DB, files)
 	}
 	tx, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
@@ -199,10 +207,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
+	if e = refuseUnknown(ctx, tx, files); e != nil {
+		return e
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		sum := hex.EncodeToString(h[:])
 		var old string
 		e = tx.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=?", f.Name()).Scan(&old)
@@ -222,6 +233,38 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	return wrap(tx.Commit())
+}
+
+// migrationBytes normalizes line endings before hashing: a checkout with
+// CRLF line endings (Git on Windows) must produce the same checksums as the
+// LF files every existing database recorded.
+func migrationBytes(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
+
+// refuseUnknown rejects a database that records a migration this build does
+// not embed: it was written by a newer thoth-lite, and running older code
+// against it could corrupt memory. Downgrades are never attempted.
+func refuseUnknown(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, files []fs.DirEntry) error {
+	known := map[string]bool{}
+	for _, f := range files {
+		known[f.Name()] = true
+	}
+	rows, e := q.QueryContext(ctx, "SELECT version FROM schema_migrations")
+	if e != nil {
+		return wrap(e)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v string
+		if e = rows.Scan(&v); e != nil {
+			return wrap(e)
+		}
+		if !known[v] {
+			return fmt.Errorf("database schema %s is newer than this thoth-lite %s; upgrade thoth-lite (downgrades are not supported)", v, memory.LiteVersion)
+		}
+	}
+	return wrap(rows.Err())
 }
 
 func (s *Store) SchemaVersion(ctx context.Context) (string, error) {
@@ -395,7 +438,7 @@ func Compatibility(ctx context.Context, path string) (applied []string, err erro
 	}
 	for _, f := range files {
 		b, _ := schema.ReadFile("schema/" + f.Name())
-		h := sha256.Sum256(b)
+		h := sha256.Sum256(migrationBytes(b))
 		known[f.Name()] = hex.EncodeToString(h[:])
 	}
 	rows, e := db.QueryContext(ctx, "SELECT version, checksum FROM schema_migrations ORDER BY version")
@@ -424,4 +467,10 @@ func Compatibility(ctx context.Context, path string) (applied []string, err erro
 		return nil, errors.New("database has no applied migrations")
 	}
 	return applied, nil
+}
+
+// MigrationChecksum is the checksum recorded for a migration file's content.
+func MigrationChecksum(b []byte) string {
+	h := sha256.Sum256(migrationBytes(b))
+	return hex.EncodeToString(h[:])
 }

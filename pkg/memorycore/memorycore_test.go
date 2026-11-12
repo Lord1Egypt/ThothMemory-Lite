@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Lord1Egypt/ThothMemory-Lite/internal/mcptools"
 	"github.com/Lord1Egypt/ThothMemory-Lite/pkg/memorycore"
 )
 
@@ -32,7 +33,7 @@ func TestEmbeddingContract(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(agent.Tools()) != 25 || len(reader.Tools()) >= len(agent.Tools()) {
+	if len(agent.Tools()) != len(mcptools.Contracts) || len(reader.Tools()) >= len(agent.Tools()) {
 		t.Fatal("tool lists", len(agent.Tools()), len(reader.Tools()))
 	}
 	for _, tool := range reader.Tools() {

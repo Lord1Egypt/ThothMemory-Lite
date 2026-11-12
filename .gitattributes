@@ -1,0 +1,5 @@
+# Migration checksums are recorded in every database: line endings must never change.
+*.sql text eol=lf
+*.md text eol=lf
+*.go text eol=lf
+*.db binary

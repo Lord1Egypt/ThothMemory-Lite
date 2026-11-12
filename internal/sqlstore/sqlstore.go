@@ -103,6 +103,12 @@ func (s *Store) rows(ctx context.Context, q queryer, query string, args ...any) 
 	return out, s.D.Wrap(r.Err())
 }
 
+// Rows runs a read query and returns JSON-shaped rows, for engine-specific
+// reads that are not part of memory.Backend.
+func (s *Store) Rows(ctx context.Context, query string, args ...any) ([]memory.Row, error) {
+	return s.rows(ctx, s.DB, query, args...)
+}
+
 // StoredTime is the fixed-width UTC text form used where an engine stores
 // timestamps as text; equal width keeps text order chronological.
 const StoredTime = "2006-01-02T15:04:05.000000Z"
